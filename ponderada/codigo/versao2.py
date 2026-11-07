@@ -39,6 +39,9 @@ class BufferProtegido:
 
         Parâmetros:
             n (int): número de posições do buffer circular.
+
+        Retorno:
+            None.
         """
         self.n = n
         self.buffer = [-1] * n
