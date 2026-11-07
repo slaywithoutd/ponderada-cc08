@@ -256,7 +256,7 @@ flowchart LR
 
 *Figura 2: organização do software da Plataforma V.*
 
-Sensor, processamento e motor viram threads de um mesmo processo. As três trabalham sobre as mesmas amostras e, como threads, dividem o buffer da A4 direto na memória, sem cópia e sem chamada de sistema a cada amostra. São criadas uma vez, no boot. A troca entre threads do mesmo processo mantém o espaço de endereçamento, então não troca a tabela de páginas nem esvazia a TLB, e esse custo se repete a cada 10 ms dentro do caminho que tem prazo de 5 ms. Separar essas tarefas em processos também não traria isolamento útil: se qualquer uma delas cair, a pulseira deixa de avisar sobre obstáculos de todo modo.
+Sensor, processamento e motor viram threads de um mesmo processo. As três trabalham sobre as mesmas amostras e, como threads, dividem o buffer da A4 direto na memória, sem cópia e sem chamada de sistema a cada amostra. São criadas uma vez, no boot, e no Linux criar uma thread custa na ordem de 10 μs, contra cerca de 60 μs para criar um processo com `fork`. A troca de contexto custa na faixa de 1 a 2 μs nos dois casos, porque o que pesa é a passagem pelo kernel; entre threads, a troca mantém o espaço de endereçamento e não precisa trocar a tabela de páginas, o que economiza pouco a mais. O ganho maior está em não haver IPC nem cópia de dados a cada amostra, num caminho que se repete a cada 10 ms com prazo de 5 ms. Separar essas tarefas em processos também não traria isolamento útil: se qualquer uma delas cair, a pulseira deixa de avisar sobre obstáculos de todo modo.
 
 O BLE vira um processo separado. Ele só precisa de uma cópia do log e de enviar comandos de configuração de vez em quando, sem acesso à memória das amostras. A comunicação por IPC é mais cara, mas acontece fora do caminho crítico; o log pode ir em lotes, por exemplo a cada 100 ms, e esse custo não entra nos 5 ms. É também a única tarefa que conversa com o mundo de fora e a de código mais complexo (pilha Bluetooth e parser de comandos). Se ela travar ou cair, o sistema reinicia só esse processo, e a vibração continua.
 
@@ -300,6 +300,8 @@ O código está em [`codigo/`](codigo/), em Python 3 com `threading` e sem depen
 | `comum.py` | Parâmetros (N = 7, 20.000 amostras, 1 s para considerar travamento), análise e tabelas |
 
 Cada script roda as 3 execuções com 20.000 amostras e N = 7 com um único comando (`python versao1.py`). Nas contagens, consumidas são as leituras que o motor fez do buffer, perdidas são as amostras de 0 a 19.999 que nunca chegaram ao motor e duplicadas são as leituras repetidas de uma amostra já lida.
+
+Na versão 1, os laços de espera ocupada também têm um `time.sleep(0)`. No CPython, só uma thread executa código Python por vez (o GIL), e uma thread girando no laço só cede a vez a cada 5 ms, o intervalo de troca padrão do interpretador. Sem o `sleep(0)`, a thread que espera ocuparia quase todo esse tempo à toa e a execução ficaria muito lenta. Com ele, a thread devolve a vez logo após testar o contador, como faria num processador de um núcleo só.
 
 ### Resultados
 
@@ -444,8 +446,8 @@ Para quem usa a pulseira, a experiência não muda e o congelamento deixa de aco
 
 O código das threads continua o mesmo, e o sistema passa a detectar o travamento e se recuperar:
 
-1. Todo `P` vira um DOWN com prazo (`sem_timedwait`), de 20 ms, por exemplo. Se o prazo vencer, a thread libera o que segura, registra o evento e tenta de novo depois de um intervalo aleatório. A desistência quebra a não preempção.
-2. Um watchdog de hardware precisa ser alimentado pelo laço principal a cada 10 ms. Se passar mais de 50 ms sem sinal, o chip reinicia a pulseira sozinho.
+1. Todo `P` vira um DOWN com prazo (`sem_timedwait`) de 20 ms. Cada uso de i2c, log ou ble é uma operação curta, que precisa caber no prazo de 5 ms da amostra; uma espera de 20 ms, o equivalente a duas amostras, já indica que algo está errado. Se o prazo vencer, a thread libera o que segura, registra o evento e tenta de novo depois de um intervalo aleatório. A desistência quebra a não preempção.
+2. Um watchdog de hardware precisa ser alimentado pelo laço principal a cada 10 ms, uma vez por amostra. Se passar mais de 50 ms sem sinal, o chip reinicia a pulseira sozinho. Esse limite tolera algumas amostras atrasadas, sem reiniciar por um atraso isolado, e ainda é bem menor que o tempo de uma pessoa dar um passo.
 
 Para quem usa, o deadlock ainda pode ocorrer, mas deixa de ser permanente. Quando o prazo do DOWN resolve, a pessoa perde no máximo algumas amostras e não percebe nada. Se o watchdog precisar reiniciar a pulseira, ela fica cerca de 4 s sem vibração, avisada por um pulso longo. Isso é muito melhor do que um congelamento que dura até alguém desligar o aparelho, mas ainda são 4 s andando sem aviso, por isso essa correção funciona como rede de segurança e não substitui a correção 1.
 
@@ -459,13 +461,13 @@ A pulseira vai para a produção com a Plataforma H e o acelerador DSP, ao custo
 
 O requisito que orienta a escolha é processar cada amostra em até 5 ms. A Plataforma H sozinha leva 5,625 ms e não atende. Com o DSP, o tempo cai para 2,925 ms e não varia, porque não há sistema operacional nem cache para atrasar a tarefa. A Plataforma V atende no papel, com 1,437 ms em média, mas chega a 4,437 ms no pior caso, somados os 3 ms de atraso do Linux. Sobram 0,56 ms, e uma taxa de falta de 7,9% em vez de 5,5% já faria a pulseira perder o prazo. Esse pior caso de 4,437 ms foi o número que mais pesou: num produto em que um atraso significa um obstáculo sem aviso, a margem não pode depender do comportamento do Linux.
 
-Com essa escolha, a empresa abre mão da atualização pela internet (OTA) e do ecossistema do Linux. Toda correção de firmware, inclusive a do deadlock da A5, exigirá levar a pulseira à assistência técnica. O usuário paga com dias sem o aparelho, e a empresa paga o frete e o atendimento. Em troca, a economia é de R$ 33 por unidade, ou R$ 66 mil nas 2.000 pulseiras do edital, o suficiente para cerca de 1.780 pulseiras a mais.
+Com essa escolha, a empresa abre mão da atualização pela internet (OTA) e do ecossistema do Linux. Toda correção de firmware exigirá levar a pulseira à assistência técnica. Se o deadlock da A5 aparecer em campo antes da correção, as 2.000 pulseiras terão que voltar, e até lá o watchdog limita o efeito a cerca de 4 s sem vibração a cada travamento. O usuário paga com o tempo sem o aparelho, e a empresa paga o frete e o atendimento. Em troca, a economia é de R$ 33 por unidade, ou R$ 66 mil nas 2.000 pulseiras do edital, o suficiente para cerca de 1.780 pulseiras a mais.
 
-Para quem usa, o aviso de obstáculo chega sempre com o mesmo atraso, e um microcontrolador de 48 MHz consome menos energia que um SoC de 1,2 GHz com Linux, o que aumenta a duração da bateria. A desvantagem são as atualizações, mais raras e mais trabalhosas.
+Para quem usa, o aviso de obstáculo chega sempre com o mesmo atraso, e um microcontrolador de 48 MHz consome menos energia que um SoC de 1,2 GHz com Linux, o que aumenta a duração da bateria.
 
 O risco de segurança fica concentrado na interface BLE, já que a H não tem Linux, shell nem serviços de rede, e uma falha nessa interface não poderá ser corrigida remotamente. Por isso, a interface aceitará apenas mensagens de log e parâmetros dentro de faixas válidas, o bootloader só aceitará firmware assinado, o watchdog será mantido e o código BLE passará por revisão de segurança antes do lançamento.
 
-A decisão muda se, nos seis primeiros meses em campo, for necessária mais de uma atualização por cabo por pulseira. Com cerca de R$ 30 por atendimento, duas visitas à assistência superam a economia de R$ 33 por unidade. Nesse caso, a Plataforma V volta a ser avaliada com kernel de tempo real (PREEMPT_RT), desde que um teste de 72 horas mostre pior caso abaixo de 4 ms.
+A decisão muda se, nos seis primeiros meses em campo, for necessária mais de uma atualização por cabo por pulseira. Nesse caso, a Plataforma V volta a ser avaliada com kernel de tempo real (PREEMPT_RT), desde que um teste de 72 horas mostre pior caso abaixo de 4 ms. O limite vem de uma estimativa de R$ 30 por atendimento (frete de ida e volta e tempo do técnico), com a qual duas visitas superam a economia de R$ 33 por unidade. Se a cotação real passar de R$ 33, uma única visita já basta para rever a decisão.
 
 ---
 
