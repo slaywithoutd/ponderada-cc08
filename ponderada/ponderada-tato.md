@@ -124,7 +124,7 @@ Na arquitetura Von Neumann, instruções e dados disputam o mesmo barramento e a
 
 *Figura 1: caches do processador do meu computador.*
 
-O processador é um Intel Core i5-1345U, com 2 núcleos de desempenho (P) e 8 de eficiência (E). O Windows lista as caches por tipo de núcleo, resumidas na Tabela 4.
+O processador é um Intel Core i5-1345U, com 2 núcleos de desempenho (P) e 8 de eficiência (E). Na Figura 1, o Windows lista as caches duas vezes, uma para cada tipo de núcleo, com CacheType 3 para instruções, 4 para dados e 5 para cache unificada. A Tabela 4 resume esses valores.
 
 *Tabela 4: caches do Intel Core i5-1345U.*
 
@@ -307,9 +307,9 @@ Cada script roda as 3 execuções com 20.000 amostras e N = 7 com um único coma
 
 | Versão | Execução | Consumidas | Perdidas | Duplicadas | Travou? |
 |---|---|---|---|---|---|
-| 1 (sem sincronização) | 1 | 20.000 | 2.866 | 2.866 | Não |
-| 1 (sem sincronização) | 2 | 18.550 | 3.207 | 1.757 | Sim |
-| 1 (sem sincronização) | 3 | 19.681 | 1.367 | 1.048 | Sim |
+| 1 (sem sincronização) | 1 | 16.494 | 4.424 | 918 | Sim |
+| 1 (sem sincronização) | 2 | 20.000 | 2.337 | 2.337 | Não |
+| 1 (sem sincronização) | 3 | 17.469 | 4.879 | 2.348 | Sim |
 | 2 (semáforos) | 1 | 20.000 | 0 | 0 | Não |
 | 2 (semáforos) | 2 | 20.000 | 0 | 0 | Não |
 | 2 (semáforos) | 3 | 20.000 | 0 | 0 | Não |
@@ -343,7 +343,7 @@ A escrita ou leitura da posição do buffer também faz parte dela, porque só �
 
 Com o contador acima do real, o consumidor acredita que há mais amostras do que existem e lê de novo uma posição já consumida, o que gera as duplicadas. Quando é o consumidor que escreve por último, o contador fica abaixo do real (2 com 3 amostras no buffer), o produtor enxerga uma posição livre a mais e sobrescreve uma amostra que o motor ainda não leu, o que gera as perdidas.
 
-Nas execuções 2 e 3, o contador terminou em 0 com amostras esquecidas no buffer. O produtor já tinha acabado, e o consumidor ficou esperando amostras que, para o contador, não existiam; depois de 1 s sem receber nada, a execução foi registrada como travada. Na execução 1, o erro foi para o outro lado: o contador terminou em 7, o motor fez as 20.000 leituras, e 2.866 delas eram repetidas. Os números mudam a cada execução porque dependem de onde o escalonador interrompe cada thread, o sinal típico de uma condição de corrida.
+Nas execuções 1 e 3, o contador terminou em 0 com amostras esquecidas no buffer. O produtor já tinha acabado, e o consumidor ficou esperando amostras que, para o contador, não existiam; depois de 1 s sem receber nada, a execução foi registrada como travada. Na execução 2, o erro foi para o outro lado: o contador terminou em 7, o motor fez as 20.000 leituras, e 2.337 delas eram repetidas. Os números mudam a cada execução porque dependem de onde o escalonador interrompe cada thread, o sinal típico de uma condição de corrida.
 
 ### O que cada semáforo garante na versão 2
 
